@@ -8,7 +8,7 @@ use crate::crypto::types::{Certificate, CertificateChain, PrivateKey};
 use crate::{
     cid_generator::{ConnectionIdGenerator, RandomConnectionIdGenerator},
     congestion,
-    crypto::{self, ClientConfig as _, HandshakeTokenKey as _, HmacKey as _, ServerConfig as _},
+    crypto::{self, HandshakeTokenKey as _, HmacKey as _},
     VarInt, VarIntBoundsExceeded, DEFAULT_SUPPORTED_VERSIONS,
 };
 
@@ -457,10 +457,10 @@ where
     S: crypto::Session,
 {
     /// Create a default config with a particular `master_key`
-    pub fn new(prk: S::HandshakeTokenKey) -> Self {
+    pub fn new(crypto: S::ServerConfig, prk: S::HandshakeTokenKey) -> Self {
         Self {
             transport: Arc::new(TransportConfig::default()),
-            crypto: S::ServerConfig::new(),
+            crypto,
 
             token_key: Arc::new(prk),
             use_stateless_retry: false,
@@ -513,14 +513,43 @@ where
 
 #[cfg(feature = "rustls")]
 impl ServerConfig<crypto::rustls::TlsSession> {
-    /// Set the certificate chain that will be presented to clients
-    pub fn certificate(
-        &mut self,
-        cert_chain: CertificateChain,
-        key: PrivateKey,
-    ) -> Result<&mut Self, rustls::TLSError> {
-        Arc::make_mut(&mut self.crypto).set_single_cert(cert_chain.certs, key.inner)?;
-        Ok(self)
+    /// Create a server config with the given certificate chain to be presented to clients
+    ///
+    /// Uses a randomized handshake token key.
+    pub fn with_single_cert(cert_chain: CertificateChain, key_der: PrivateKey) -> Self {
+        let crypto = rustls::ServerConfig::builder()
+            .with_cipher_suites(&crypto::rustls::QUIC_CIPHER_SUITES)
+            .with_safe_default_kx_groups()
+            .with_protocol_versions(&[&rustls::version::TLS13])
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(cert_chain.certs, key_der.inner)
+            .unwrap();
+
+        let rng = &mut rand::thread_rng();
+        let mut master_key = [0u8; 64];
+        rng.fill_bytes(&mut master_key);
+        let master_key =
+            <crypto::rustls::TlsSession as crypto::Session>::HandshakeTokenKey::from_secret(
+                &master_key,
+            );
+
+        Self::new(Arc::new(crypto), master_key)
+    }
+
+    /// Create a server config with the given [`rustls::ServerConfig`]
+    ///
+    /// Uses a randomized handshake token key.
+    pub fn with_crypto(crypto: Arc<rustls::ServerConfig>) -> Self {
+        let rng = &mut rand::thread_rng();
+        let mut master_key = [0u8; 64];
+        rng.fill_bytes(&mut master_key);
+        let master_key =
+            <crypto::rustls::TlsSession as crypto::Session>::HandshakeTokenKey::from_secret(
+                &master_key,
+            );
+
+        Self::new(crypto, master_key)
     }
 }
 
@@ -538,20 +567,6 @@ where
             .field("concurrent_connections", &self.concurrent_connections)
             .field("migration", &self.migration)
             .finish()
-    }
-}
-
-impl<S> Default for ServerConfig<S>
-where
-    S: crypto::Session,
-{
-    fn default() -> Self {
-        let rng = &mut rand::thread_rng();
-
-        let mut master_key = [0u8; 64];
-        rng.fill_bytes(&mut master_key);
-
-        Self::new(S::HandshakeTokenKey::from_secret(&master_key))
     }
 }
 
@@ -589,27 +604,57 @@ where
 
 #[cfg(feature = "rustls")]
 impl ClientConfig<crypto::rustls::TlsSession> {
-    /// Add a trusted certificate authority
-    pub fn add_certificate_authority(
-        &mut self,
-        cert: Certificate,
-    ) -> Result<&mut Self, webpki::Error> {
-        let anchor = webpki::trust_anchor_util::cert_der_as_trust_anchor(&cert.inner.0)?;
-        Arc::make_mut(&mut self.crypto)
-            .root_store
-            .add_server_trust_anchors(&webpki::TLSServerTrustAnchors(&[anchor]));
-        Ok(self)
-    }
-}
+    /// Create a client configuration that trusts the platform's native roots
+    #[cfg(feature = "native-certs")]
+    pub fn with_native_roots() -> Self {
+        let mut roots = rustls::RootCertStore::empty();
+        let certs = match rustls_native_certs::load_native_certs() {
+            Ok(certs) => certs,
+            Err(e) => {
+                tracing::warn!("couldn't load any default trust roots: {}", e);
+                Vec::new()
+            }
+        };
 
-impl<S> Default for ClientConfig<S>
-where
-    S: crypto::Session,
-{
-    fn default() -> Self {
+        for cert in certs {
+            if let Err(e) = roots.add(&rustls::Certificate(cert.0)) {
+                tracing::warn!("failed to parse trust anchor: {}", e);
+            }
+        }
+
+        #[cfg(feature = "certificate-transparency")]
+        let logs = ct_logs::LOGS;
+        #[cfg(not(feature = "certificate-transparency"))]
+        let logs = &[];
+
+        Self::new(roots, logs)
+    }
+
+    /// Create a client configuration that trusts specified trust anchors
+    pub fn with_root_certificates(certs: impl IntoIterator<Item = Certificate>) -> Self {
+        let mut roots = rustls::RootCertStore::empty();
+        for cert in certs {
+            if let Err(e) = roots.add(&cert.inner) {
+                tracing::warn!("failed to parse trust anchor: {}", e);
+            }
+        }
+
+        Self::new(roots, &[])
+    }
+
+    /// Create a client configuration with specific trusted authorities
+    fn new(roots: rustls::RootCertStore, ct_logs: &'static [&'static sct::Log]) -> Self {
+        let crypto = rustls::ClientConfig::builder()
+            .with_cipher_suites(&crypto::rustls::QUIC_CIPHER_SUITES)
+            .with_safe_default_kx_groups()
+            .with_protocol_versions(&[&rustls::version::TLS13])
+            .unwrap()
+            .with_root_certificates(roots, ct_logs)
+            .with_no_client_auth();
+
         Self {
-            transport: Default::default(),
-            crypto: S::ClientConfig::new(),
+            transport: Arc::new(TransportConfig::default()),
+            crypto: Arc::new(crypto),
         }
     }
 }

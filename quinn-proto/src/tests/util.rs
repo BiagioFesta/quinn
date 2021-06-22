@@ -379,34 +379,28 @@ pub fn server_config() -> ServerConfig {
     let key = CERTIFICATE.serialize_private_key_der();
     let cert = CERTIFICATE.serialize_pem().unwrap();
 
-    let mut crypto = crypto::ServerConfig::new();
-    Arc::make_mut(&mut crypto)
-        .set_single_cert(
-            rustls::internal::pemfile::certs(&mut cert.as_bytes()).unwrap(),
-            rustls::PrivateKey(key.to_vec()),
-        )
-        .unwrap();
-    ServerConfig {
-        crypto,
-        ..Default::default()
-    }
+    ServerConfig::with_single_cert(
+        rustls_pemfile::certs(&mut cert.as_bytes())
+            .unwrap()
+            .into_iter()
+            .map(|cert| crate::Certificate {
+                inner: rustls::Certificate(cert),
+            })
+            .collect(),
+        crate::PrivateKey {
+            inner: rustls::PrivateKey(key.to_vec()),
+        },
+    )
 }
 
 pub fn client_config() -> ClientConfig {
-    let cert = CERTIFICATE.serialize_der().unwrap();
-    let anchor = webpki::trust_anchor_util::cert_der_as_trust_anchor(&cert).unwrap();
-    let anchor_vec = vec![anchor];
+    let cert = Certificate::from_der(&CERTIFICATE.serialize_der().unwrap()).unwrap();
+    let mut config = ClientConfig::with_root_certificates(vec![cert]);
 
-    let mut crypto = crypto::ClientConfig::new();
-    Arc::make_mut(&mut crypto)
-        .root_store
-        .add_server_trust_anchors(&webpki::TLSServerTrustAnchors(&anchor_vec));
-    Arc::make_mut(&mut crypto).key_log = Arc::new(KeyLogFile::new());
-    Arc::make_mut(&mut crypto).enable_early_data = true;
-    ClientConfig {
-        transport: Default::default(),
-        crypto,
-    }
+    Arc::make_mut(&mut config.crypto).key_log = Arc::new(KeyLogFile::new());
+    Arc::make_mut(&mut config.crypto).enable_early_data = true;
+
+    config
 }
 
 pub fn min_opt<T: Ord>(x: Option<T>, y: Option<T>) -> Option<T> {
@@ -450,6 +444,6 @@ fn split_transmit(transmit: Transmit) -> Vec<Transmit> {
 lazy_static! {
     pub static ref SERVER_PORTS: Mutex<RangeFrom<u16>> = Mutex::new(4433..);
     pub static ref CLIENT_PORTS: Mutex<RangeFrom<u16>> = Mutex::new(44433..);
-    static ref CERTIFICATE: rcgen::Certificate =
+    pub(crate) static ref CERTIFICATE: rcgen::Certificate =
         rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
 }

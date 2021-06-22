@@ -831,10 +831,7 @@ mod tests {
     #[cfg(feature = "rustls")]
     #[test]
     fn header_encoding() {
-        use crate::{
-            crypto::{rustls::TlsSession, PacketKey, Session},
-            Side,
-        };
+        use crate::{Side, crypto::{PacketKey, Session, rustls::TlsSession}};
 
         let dcid = ConnectionId::new(&hex!("06b858ec6f80452b"));
         let client = TlsSession::initial_keys(&dcid, Side::Client);
