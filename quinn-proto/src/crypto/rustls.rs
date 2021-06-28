@@ -281,14 +281,16 @@ impl crypto::ClientConfig<TlsSession> for Arc<rustls::ClientConfig> {
         cfg.enable_early_data = true;
         #[cfg(feature = "native-certs")]
         match rustls_native_certs::load_native_certs() {
-            Ok(x) => {
-                cfg.root_store = x;
+            Ok(certs) => {
+                let mut roots = rustls::RootCertStore::empty();
+                for cert in certs {
+                    if let Err(e) = roots.add(&rustls::Certificate(cert.0)) {
+                        tracing::warn!("failed to parse trust anchor: {}", e);
+                    }
+                }
+                cfg.root_store = roots;
             }
-            Err((Some(x), e)) => {
-                cfg.root_store = x;
-                tracing::warn!("couldn't load some default trust roots: {}", e);
-            }
-            Err((None, e)) => {
+            Err(e) => {
                 tracing::warn!("couldn't load any default trust roots: {}", e);
             }
         }
