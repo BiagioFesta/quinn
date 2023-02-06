@@ -1,0 +1,112 @@
+From d7d80936193d585bf23bb8a5082a8810392ca429 Mon Sep 17 00:00:00 2001
+From: BiagioFesta <15035284+BiagioFesta@users.noreply.github.com>
+Date: Mon, 6 Feb 2023 16:13:40 +0100
+Subject: [PATCH] Ignore CC when there are DATAGRAMS to be sent
+
+---
+ quinn-proto/src/connection/mod.rs | 31 +++++++++++++++++++++++++------
+ quinn/src/connection.rs           | 11 +++++++++++
+ 2 files changed, 36 insertions(+), 6 deletions(-)
+
+diff --git a/quinn-proto/src/connection/mod.rs b/quinn-proto/src/connection/mod.rs
+index 7e93d9d1..d2eb4646 100644
+--- a/quinn-proto/src/connection/mod.rs
++++ b/quinn-proto/src/connection/mod.rs
+@@ -208,6 +208,8 @@ pub struct Connection {
+     /// Whether the last `poll_transmit` call yielded no data because there was
+     /// no outgoing application data.
+     app_limited: bool,
++    /// Ignore CC when pending dgrams on egress
++    ignore_cc_on_dgrams: bool,
+ 
+     streams: StreamsState,
+     /// Surplus remote CIDs for future use on new paths
+@@ -311,6 +313,7 @@ impl Connection {
+             pto_count: 0,
+ 
+             app_limited: false,
++            ignore_cc_on_dgrams: false,
+             in_flight: InFlight::new(),
+             receiving_ecn: false,
+             total_authed_packets: 0,
+@@ -515,6 +518,8 @@ impl Connection {
+         let mut pad_datagram = false;
+         let mut congestion_blocked = false;
+ 
++        let ignore_cc = self.ignore_cc_on_dgrams && !self.datagrams.outgoing.is_empty();
++
+         // Iterate over all spaces and find data to send
+         let mut space_idx = 0;
+         let spaces = [SpaceId::Initial, SpaceId::Handshake, SpaceId::Data];
+@@ -586,7 +591,9 @@ impl Connection {
+                     debug_assert!(untracked_bytes <= self.path.current_mtu() as u64);
+ 
+                     let bytes_to_send = u64::from(self.path.current_mtu()) + untracked_bytes;
+-                    if self.in_flight.bytes + bytes_to_send >= self.path.congestion.window() {
++                    if !ignore_cc
++                        && self.in_flight.bytes + bytes_to_send >= self.path.congestion.window()
++                    {
+                         space_idx += 1;
+                         congestion_blocked = true;
+                         // We continue instead of breaking here in order to avoid
+@@ -603,11 +610,13 @@ impl Connection {
+                         self.path.congestion.window(),
+                         now,
+                     ) {
+-                        self.timers.set(Timer::Pacing, delay);
+-                        congestion_blocked = true;
+-                        // Loss probes should be subject to pacing, even though
+-                        // they are not congestion controlled.
+-                        break;
++                        if !ignore_cc {
++                            self.timers.set(Timer::Pacing, delay);
++                            congestion_blocked = true;
++                            // Loss probes should be subject to pacing, even though
++                            // they are not congestion controlled.
++                            break;
++                        }
+                     }
+                 }
+ 
+@@ -1176,6 +1185,16 @@ impl Connection {
+         }
+     }
+ 
++    /// Alters the behavior of the transmission logic.
++    ///
++    /// When this flag is enabled, the CWND is not taken into account for transmission
++    /// when there are outgoing datagrams in the queue.
++    ///
++    /// *Note*: this is not standard compliant (RFC 9001), it's an hacky for AWS DCV.
++    pub fn set_ignore_cc_on_dgram_egress(&mut self, enable: bool) {
++        self.ignore_cc_on_dgrams = enable;
++    }
++
+     fn on_ack_received(
+         &mut self,
+         now: Instant,
+diff --git a/quinn/src/connection.rs b/quinn/src/connection.rs
+index 15bba134..7ee944e1 100644
+--- a/quinn/src/connection.rs
++++ b/quinn/src/connection.rs
+@@ -567,6 +567,17 @@ impl Connection {
+         // May need to send MAX_STREAMS to make progress
+         conn.wake();
+     }
++
++    /// Alters the behavior of the transmission logic.
++    ///
++    /// When this flag is enabled, the CWND is not taken into account for transmission
++    /// when there are outgoing datagrams in the queue.
++    ///
++    /// *Note*: this is not standard compliant (RFC 9001), it's an hacky for AWS DCV.
++    pub fn set_ignore_cc_on_dgram_egress(&self, enable: bool) {
++        let mut conn = self.0.state.lock("set_ignore_cc_on_dgram_egress");
++        conn.inner.set_ignore_cc_on_dgram_egress(enable);
++    }
+ }
+ 
+ pin_project! {
+-- 
+2.43.0
+
