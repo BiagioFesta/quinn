@@ -1,6 +1,6 @@
 use std::{
     cmp,
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, VecDeque, BTreeSet},
     mem,
     ops::{Index, IndexMut},
     time::{Duration, Instant},
@@ -36,6 +36,8 @@ pub(super) struct PacketSpace {
     /// Transmitted but not acked
     // We use a BTreeMap here so we can efficiently query by range on ACK and for loss detection
     pub(super) sent_packets: BTreeMap<u64, SentPacket>,
+    /// TODO(bfesta): doc
+    pub(super) lost_packets: BTreeSet<u64>,
     /// Number of explicit congestion notification codepoints seen on incoming packets
     pub(super) ecn_counters: frame::EcnCounts,
     /// Recent ECN counters sent by the peer in ACK frames
@@ -81,6 +83,7 @@ impl PacketSpace {
             largest_acked_packet: None,
             largest_acked_packet_sent: now,
             sent_packets: BTreeMap::new(),
+            lost_packets: BTreeSet::new(),
             ecn_counters: frame::EcnCounts::ZERO,
             ecn_feedback: frame::EcnCounts::ZERO,
 

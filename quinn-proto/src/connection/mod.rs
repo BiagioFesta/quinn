@@ -1293,6 +1293,10 @@ impl Connection {
 
         let mut ack_eliciting_acked = false;
         for packet in newly_acked.elts() {
+            if self.spaces[space].lost_packets.remove(&packet) {
+                warn!("TODO(bfesta): received ACK for lost packet. Increase packet threshold");
+            }
+
             if let Some(info) = self.spaces[space].sent_packets.remove(&packet) {
                 if let Some(acked) = info.largest_acked {
                     // Assume ACKs for all packets below the largest acknowledged in `packet` have
@@ -1567,6 +1571,7 @@ impl Connection {
 
             for packet in &lost_packets {
                 let info = self.spaces[pn_space].sent_packets.remove(packet).unwrap(); // safe: lost_packets is populated just above
+                self.spaces[pn_space].lost_packets.insert(*packet);
                 self.remove_in_flight(pn_space, &info);
                 for frame in info.stream_frames {
                     self.streams.retransmit(frame);
