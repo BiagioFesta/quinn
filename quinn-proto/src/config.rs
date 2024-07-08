@@ -916,6 +916,11 @@ impl ServerConfig {
         self.incoming_buffer_size_total = incoming_buffer_size_total;
         self
     }
+
+    /// Gets the cryptographic configuration in use
+    pub fn crypto_config(&self) -> &dyn crypto::ServerConfig {
+        self.crypto.as_ref()
+    }
 }
 
 #[cfg(feature = "rustls")]
@@ -1026,6 +1031,11 @@ impl ClientConfig {
     pub fn version(&mut self, version: u32) -> &mut Self {
         self.version = version;
         self
+    }
+
+    /// Gets the cryptographic configuration in use
+    pub fn crypto_config(&self) -> &dyn crypto::ClientConfig {
+        self.crypto.as_ref()
     }
 }
 
