@@ -636,6 +636,17 @@ impl Connection {
         // May need to send MAX_STREAMS to make progress
         conn.wake();
     }
+
+    /// Alters the behavior of the transmission logic.
+    ///
+    /// When this flag is enabled, the CWND is not taken into account for transmission
+    /// when there are outgoing datagrams in the queue.
+    ///
+    /// *Note*: this is not standard compliant (RFC 9001), it's an hacky for AWS DCV.
+    pub fn set_ignore_cc_on_dgram_egress(&self, enable: bool) {
+        let mut conn = self.0.state.lock("set_ignore_cc_on_dgram_egress");
+        conn.inner.set_ignore_cc_on_dgram_egress(enable);
+    }
 }
 
 pin_project! {
