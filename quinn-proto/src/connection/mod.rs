@@ -226,6 +226,8 @@ pub struct Connection {
     /// Whether the last `poll_transmit` call yielded no data because there was
     /// no outgoing application data.
     app_limited: bool,
+    /// Ignore CC when pending dgrams on egress
+    ignore_cc_on_dgrams: bool,
 
     streams: StreamsState,
     /// Surplus remote CIDs for future use on new paths
@@ -340,6 +342,8 @@ impl Connection {
             pto_count: 0,
 
             app_limited: false,
+            ignore_cc_on_dgrams: false,
+
             receiving_ecn: false,
             total_authed_packets: 0,
 
@@ -566,6 +570,8 @@ impl Connection {
         let mut pad_datagram = false;
         let mut congestion_blocked = false;
 
+        let ignore_cc = self.ignore_cc_on_dgrams && !self.datagrams.outgoing.is_empty();
+
         // Iterate over all spaces and find data to send
         let mut space_idx = 0;
         let spaces = [SpaceId::Initial, SpaceId::Handshake, SpaceId::Data];
@@ -641,7 +647,10 @@ impl Connection {
                     debug_assert!(untracked_bytes <= segment_size as u64);
 
                     let bytes_to_send = segment_size as u64 + untracked_bytes;
-                    if self.path.in_flight.bytes + bytes_to_send >= self.path.congestion.window() {
+                    if !ignore_cc
+                        && self.path.in_flight.bytes + bytes_to_send
+                            >= self.path.congestion.window()
+                    {
                         space_idx += 1;
                         congestion_blocked = true;
                         // We continue instead of breaking here in order to avoid
@@ -659,12 +668,14 @@ impl Connection {
                         self.path.congestion.window(),
                         now,
                     ) {
-                        self.timers.set(Timer::Pacing, delay);
-                        congestion_blocked = true;
-                        // Loss probes should be subject to pacing, even though
-                        // they are not congestion controlled.
-                        trace!("blocked by pacing");
-                        break;
+                        if !ignore_cc {
+                            self.timers.set(Timer::Pacing, delay);
+                            congestion_blocked = true;
+                            // Loss probes should be subject to pacing, even though
+                            // they are not congestion controlled.
+                            trace!("blocked by pacing");
+                            break;
+                        }
                     }
                 }
 
@@ -1332,6 +1343,16 @@ impl Connection {
         if self.streams.set_receive_window(receive_window) {
             self.spaces[SpaceId::Data].pending.max_data = true;
         }
+    }
+
+    /// Alters the behavior of the transmission logic.
+    ///
+    /// When this flag is enabled, the CWND is not taken into account for transmission
+    /// when there are outgoing datagrams in the queue.
+    ///
+    /// *Note*: this is not standard compliant (RFC 9001), it's an hacky for AWS DCV.
+    pub fn set_ignore_cc_on_dgram_egress(&mut self, enable: bool) {
+        self.ignore_cc_on_dgrams = enable;
     }
 
     fn on_ack_received(
