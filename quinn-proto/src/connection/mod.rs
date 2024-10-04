@@ -1232,6 +1232,19 @@ impl Connection {
 
     #[doc(hidden)]
     pub fn initiate_key_update(&mut self) {
+        if let Some(hs) = self.crypto.handshake_data().map(|any| {
+            any.downcast::<crate::crypto::rustls::HandshakeData>()
+                .expect("only rustls is supported")
+        }) {
+            if hs.negotiated_cipher_suite == rustls::CipherSuite::TLS13_CHACHA20_POLY1305_SHA256 {
+                // RFC9001: "[..] For AEAD_CHACHA20_POLY1305, the confidentiality limit is
+                //           greater than the number of possible packets (262) and so can be
+                //           disregarded."
+                trace!("initiate_key_update ignored");
+                return;
+            }
+        }
+
         self.update_keys(None, false);
     }
 
