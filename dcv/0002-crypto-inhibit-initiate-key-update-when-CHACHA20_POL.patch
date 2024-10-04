@@ -1,0 +1,37 @@
+From 0cd9bcc6a338836c8b90616d6836430c826bada8 Mon Sep 17 00:00:00 2001
+From: Biagio Festa <bfesta@amazon.it>
+Date: Fri, 4 Oct 2024 14:24:58 +0200
+Subject: [PATCH 2/2] crypto: inhibit initiate key update when
+ CHACHA20_POLY1305 cipher
+
+---
+ quinn-proto/src/connection/mod.rs | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/quinn-proto/src/connection/mod.rs b/quinn-proto/src/connection/mod.rs
+index 9a453851..dfe73bd4 100644
+--- a/quinn-proto/src/connection/mod.rs
++++ b/quinn-proto/src/connection/mod.rs
+@@ -1232,6 +1232,19 @@ impl Connection {
+ 
+     #[doc(hidden)]
+     pub fn initiate_key_update(&mut self) {
++        if let Some(hs) = self.crypto.handshake_data().map(|any| {
++            any.downcast::<crate::crypto::rustls::HandshakeData>()
++                .expect("only rustls is supported")
++        }) {
++            if hs.negotiated_cipher_suite == rustls::CipherSuite::TLS13_CHACHA20_POLY1305_SHA256 {
++                // RFC9001: "[..] For AEAD_CHACHA20_POLY1305, the confidentiality limit is
++                //           greater than the number of possible packets (262) and so can be
++                //           disregarded."
++                trace!("initiate_key_update ignored");
++                return;
++            }
++        }
++
+         self.update_keys(None, false);
+     }
+ 
+-- 
+2.43.0
+

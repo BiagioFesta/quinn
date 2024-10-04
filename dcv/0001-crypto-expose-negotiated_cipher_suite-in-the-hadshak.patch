@@ -1,0 +1,39 @@
+From 4cfe442cbb186b27b9ec3718d96c997be262f0fe Mon Sep 17 00:00:00 2001
+From: BiagioFesta <15035284+BiagioFesta@users.noreply.github.com>
+Date: Fri, 4 Oct 2024 14:09:17 +0200
+Subject: [PATCH 1/2] crypto: expose negotiated_cipher_suite in the hadshake
+ data
+
+---
+ quinn-proto/src/crypto/rustls.rs | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/quinn-proto/src/crypto/rustls.rs b/quinn-proto/src/crypto/rustls.rs
+index 214ad83b..8c3c6baa 100644
+--- a/quinn-proto/src/crypto/rustls.rs
++++ b/quinn-proto/src/crypto/rustls.rs
+@@ -61,6 +61,11 @@ impl crypto::Session for TlsSession {
+                 Connection::Client(_) => None,
+                 Connection::Server(ref session) => session.server_name().map(|x| x.into()),
+             },
++            negotiated_cipher_suite: self
++                .inner
++                .negotiated_cipher_suite()
++                .expect("cipher is negotiated")
++                .suite(),
+         }))
+     }
+ 
+@@ -253,6 +258,9 @@ pub struct HandshakeData {
+     ///
+     /// Always `None` for outgoing connections
+     pub server_name: Option<String>,
++
++    /// The ciphersuite negotiated with the peer.
++    pub negotiated_cipher_suite: CipherSuite,
+ }
+ 
+ /// A QUIC-compatible TLS client configuration
+-- 
+2.43.0
+
